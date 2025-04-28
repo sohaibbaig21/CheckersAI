@@ -21,7 +21,3 @@ A Checkers game with an AI opponent, built using Python and Pygame. Features an 
 - You have 5 seconds per turn, or the turn switches.
 - Multi-jumps are randomly enabled once per game for each side.
 
-## Future Improvements
-- Add difficulty levels for the AI.
-- Enhance visual feedback for warp zones.
-- Support for online multiplayer.
