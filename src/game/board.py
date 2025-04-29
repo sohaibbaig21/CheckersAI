@@ -120,7 +120,6 @@ def get_all_valid_moves_for_player(board: Board, player_color: str) -> List[Tupl
                 for move in valid_moves:
                     moves.append((piece, move))
     return moves
-
 def evaluate_board(board: Board, player_color: str) -> float:
     """Evaluate the board state from the AI's perspective."""
     score = 0
@@ -133,14 +132,16 @@ def evaluate_board(board: Board, player_color: str) -> float:
                     if piece.king:
                         score += 2  # +2 for each AI king (total +3)
                     if is_in_warp_zone(piece.row, piece.col):
-                        score += 1
+                        score += 1  # Add 1 for AI piece in warp zone
                 else:
+                    # -1 for each opponent piece
                     score -= 1  # -1 for each opponent piece
                     if piece.king:
                         score -= 2  # -2 for each opponent king (total -3)
                     if is_in_warp_zone(piece.row, piece.col):
-                        score -= 1
+                        score -= 1  # Subtract 1 for opponent piece in warp zone
     return score
+
 
 def minimax_with_alpha_beta(board: Board, depth: int, maximizing_player: bool, player_color: str, alpha: float, beta: float, allow_multi_jump: bool = False) -> Tuple[float, Optional[Tuple[Piece, Tuple[int, int]]]]:
     """Minimax algorithm with alpha-beta pruning to find the best move."""
