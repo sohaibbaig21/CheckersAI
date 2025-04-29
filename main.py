@@ -36,12 +36,11 @@ def count_pieces(board: Board, color: str) -> int:
                 count += 1
     return count
 
-def reset_game() -> tuple[Board, None, str, int, bool, str, int, int, bool, bool, bool, bool]:
+def reset_game() -> tuple[Board, None, str, int, str, int, int, bool, bool, bool, bool]:
     board = Board()
     selected_piece = None
     current_turn = "white"
     moves_without_capture = 0
-    draw_prompt = False
     message = ""
     message_timer = 0
     turn_start_time = pygame.time.get_ticks()
@@ -49,7 +48,7 @@ def reset_game() -> tuple[Board, None, str, int, bool, str, int, int, bool, bool
     player_multi_jump_used = False
     ai_multi_jump_used = False
     multi_jump_active = False
-    return (board, selected_piece, current_turn, moves_without_capture, draw_prompt, message, message_timer,
+    return (board, selected_piece, current_turn, moves_without_capture, message, message_timer,
             turn_start_time, bonus_move_active, player_multi_jump_used, ai_multi_jump_used, multi_jump_active)
 
 def draw_timer(screen, remaining_time):
@@ -78,8 +77,6 @@ def main():
     current_turn = "white"
     running = True
     moves_without_capture = 0
-    DRAW_THRESHOLD = 20
-    draw_prompt = False
     message = ""
     message_timer = 0
     game_over = False
@@ -97,7 +94,17 @@ def main():
         elapsed_time = current_time - turn_start_time
         remaining_time = max(0, TURN_DURATION - elapsed_time)
 
-        if remaining_time <= 0 and not game_over:
+        if gui.animating_piece:
+            if not gui.update_animation(current_time):
+                gui.animating_piece = None
+                screen.fill((0, 0, 0))
+                gui.draw_board()
+                if message:
+                    gui.draw_message(message)
+                draw_timer(screen, remaining_time)
+                pygame.display.update()
+
+        if remaining_time <= 0 and not game_over and not gui.animating_piece:
             message = f"{current_turn.capitalize()} took too long! Turn switched."
             message_timer = 90
             current_turn = switch_turns(current_turn)
@@ -110,9 +117,9 @@ def main():
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-            elif event.type == pygame.MOUSEBUTTONDOWN:
+            elif event.type == pygame.MOUSEBUTTONDOWN and not gui.animating_piece:
                 if game_over:
-                    (board, selected_piece, current_turn, moves_without_capture, draw_prompt, message, message_timer,
+                    (board, selected_piece, current_turn, moves_without_capture, message, message_timer,
                      turn_start_time, bonus_move_active, player_multi_jump_used, ai_multi_jump_used, multi_jump_active) = reset_game()
                     gui.board = board
                     game_over = False
@@ -123,6 +130,8 @@ def main():
                     if result[0] == "move":
                         _, piece, (new_row, new_col) = result
                         board_before = deepcopy(board)
+                        gui.start_animation(piece, (piece.row, piece.col), (new_row, new_col))
+                        gui.animation_start_time = current_time
                         is_capture, can_jump_again, new_selection, bonus_move_triggered = execute_move(board, piece, new_row, new_col, multi_jump_active)
                         if is_capture:
                             captured_row, captured_col = (piece.row + new_row) // 2, (piece.col + new_col) // 2
@@ -130,12 +139,14 @@ def main():
                                 message = "Warp Zone: Capture Prevented!"
                                 message_timer = 90
                                 board.grid = board_before.grid
+                                gui.animating_piece = None
                                 continue
                             moves_without_capture = 0
                             if can_jump_again and multi_jump_active:
                                 message = "Multi-Jump Available!"
                                 message_timer = 90
                                 selected_piece = new_selection
+                                gui.animating_piece = None
                                 continue
                         else:
                             moves_without_capture += 1
@@ -146,9 +157,8 @@ def main():
                             last_moved_piece_pos = (new_row, new_col)
                             selected_piece = last_moved_piece_pos
                             turn_start_time = pygame.time.get_ticks()
+                            gui.animating_piece = None
                             continue
-                        if draw_prompt:
-                            draw_prompt = False
                         selected_piece = None
                         bonus_move_active = False
                         last_moved_piece_pos = None
@@ -167,14 +177,7 @@ def main():
                     else:
                         selected_piece = None
 
-            elif event.type == pygame.KEYDOWN and draw_prompt and not game_over:
-                if event.key == pygame.K_d:
-                    print("Game ended in a draw!")
-                    message = "Draw! Play Again?"
-                    message_timer = 0
-                    game_over = True
-
-        if not game_over and not bonus_move_active and elapsed_time < 100:
+        if not game_over and not bonus_move_active and elapsed_time < 100 and not gui.animating_piece:
             if current_turn == "white" and not player_multi_jump_used:
                 if random.random() < 0.1:
                     multi_jump_active = True
@@ -188,15 +191,42 @@ def main():
                     message = "AI Multi-Jump Activated!"
                     message_timer = 90
 
-        if current_turn == "black" and not game_over:
+        if current_turn == "black" and not game_over and not gui.animating_piece:
             board_before = deepcopy(board)
             move_made, bonus_move_triggered = make_ai_move(board, "black", depth=3, allow_multi_jump=multi_jump_active)
             if not move_made:
-                print("AI has no valid moves. Player wins!")
-                message = "Player Wins! Play Again?"
-                message_timer = 0
-                game_over = True
+                # AI has no valid moves, check if it's a draw or player wins
+                white_moves = get_all_valid_moves_for_player(board, "white")
+                if not white_moves:
+                    print("No valid moves for either player. Game is a draw!")
+                    message = "Draw! Play Again?"
+                    message_timer = 0
+                    game_over = True
+                else:
+                    print("AI has no valid moves. Player wins!")
+                    message = "Player Wins! Play Again?"
+                    message_timer = 0
+                    game_over = True
             else:
+                # Find the piece that moved for animation
+                moved_piece = None
+                start_pos = None
+                end_pos = None
+                for row in range(BOARD_SIZE):
+                    for col in range(BOARD_SIZE):
+                        piece_before = board_before.get_piece(row, col)
+                        piece_after = board.get_piece(row, col)
+                        if piece_before == 0 and piece_after != 0 and piece_after.color == "black":
+                            end_pos = (row, col)
+                            moved_piece = piece_after
+                        elif piece_before != 0 and piece_after == 0 and piece_before.color == "black":
+                            start_pos = (row, col)
+                    if moved_piece:
+                        break
+                if moved_piece and start_pos and end_pos:
+                    gui.start_animation(moved_piece, start_pos, end_pos)
+                    gui.animation_start_time = current_time
+
                 captures_occurred = False
                 captured_on_warp_zone = False
                 captured_row, captured_col = None, None
@@ -217,6 +247,7 @@ def main():
                         message = "Warp Zone: Capture Prevented!"
                         message_timer = 90
                         board.grid = board_before.grid
+                        gui.animating_piece = None
                         continue
                     moves_without_capture = 0
                     can_jump_again = False
@@ -232,6 +263,7 @@ def main():
                     if can_jump_again and multi_jump_active:
                         message = "AI Multi-Jump Available!"
                         message_timer = 90
+                        gui.animating_piece = None
                         continue
                 else:
                     moves_without_capture += 1
@@ -248,6 +280,25 @@ def main():
                     board_before_bonus = deepcopy(board)
                     move_made, bonus_move_triggered = make_ai_move(board, "black", depth=3, allow_multi_jump=False)
                     if move_made:
+                        # Animate bonus move
+                        moved_piece = None
+                        start_pos = None
+                        end_pos = None
+                        for row in range(BOARD_SIZE):
+                            for col in range(BOARD_SIZE):
+                                piece_before = board_before_bonus.get_piece(row, col)
+                                piece_after = board.get_piece(row, col)
+                                if piece_before == 0 and piece_after != 0 and piece_after.color == "black":
+                                    end_pos = (row, col)
+                                    moved_piece = piece_after
+                                elif piece_before != 0 and piece_after == 0 and piece_before.color == "black":
+                                    start_pos = (row, col)
+                            if moved_piece:
+                                break
+                        if moved_piece and start_pos and end_pos:
+                            gui.start_animation(moved_piece, start_pos, end_pos)
+                            gui.animation_start_time = current_time
+
                         captures_occurred = False
                         captured_on_warp_zone = False
                         for row in range(BOARD_SIZE):
@@ -266,6 +317,7 @@ def main():
                             message_timer = 90
                             board.grid = board_before_bonus.grid
                             last_moved_piece_pos = None
+                            gui.animating_piece = None
                     else:
                         last_moved_piece_pos = None
                 else:
@@ -274,7 +326,7 @@ def main():
                 turn_start_time = pygame.time.get_ticks()
                 multi_jump_active = False
 
-        if not game_over:
+        if not game_over and not gui.animating_piece:
             white_pieces = count_pieces(board, "white")
             black_pieces = count_pieces(board, "black")
             if white_pieces == 0:
@@ -289,22 +341,28 @@ def main():
                 game_over = True
 
             if not game_over:
-                if current_turn == "white":
-                    white_moves = get_all_valid_moves_for_player(board, "white")
-                    if not white_moves:
-                        print("Player has no valid moves. AI wins!")
-                        message = "AI Wins! Play Again?"
+                # Check for draw condition: no valid moves for the current player
+                current_player_moves = get_all_valid_moves_for_player(board, current_turn)
+                if not current_player_moves:
+                    # Check if the opponent has moves
+                    opponent_color = "black" if current_turn == "white" else "white"
+                    opponent_moves = get_all_valid_moves_for_player(board, opponent_color)
+                    if not opponent_moves:
+                        print("No valid moves for either player. Game is a draw!")
+                        message = "Draw! Play Again?"
+                        message_timer = 0
+                        game_over = True
+                    else:
+                        # Current player has no moves, opponent wins
+                        winner = "AI" if current_turn == "white" else "Player"
+                        print(f"{current_turn.capitalize()} has no valid moves. {winner} wins!")
+                        message = f"{winner} Wins! Play Again?"
                         message_timer = 0
                         game_over = True
 
-        if moves_without_capture >= DRAW_THRESHOLD and not draw_prompt and not game_over:
-            draw_prompt = True
-            message = "Game heading toward a draw. Press D to draw."
-            message_timer = 0
-
         if message_timer > 0:
             message_timer -= 1
-            if message_timer == 0 and not draw_prompt and not game_over:
+            if message_timer == 0:
                 message = ""
 
         # Fill the screen with a background color to clear the extra area
